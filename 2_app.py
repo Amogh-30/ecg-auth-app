@@ -1,14 +1,11 @@
 import numpy as np
 import os
 import joblib
-from tensorflow.keras.models import load_model
+# REMOVED: from tensorflow.keras.models import load_model
+import onnxruntime as ort # ADDED
 from sklearn.metrics.pairwise import cosine_similarity
-from flask import Flask, request, jsonify, render_template, send_from_directory
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS 
-
-import os
-# Set env variable to a STRING '0'
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0' 
 
 # --- 1. Initialize Flask App ---
 app = Flask(__name__, static_folder='static', template_folder='.')
@@ -16,37 +13,50 @@ CORS(app)
 
 # --- 2. Define Constants ---
 AUTH_THRESHOLD = 0.80 
-# Get the base directory of this script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Set the simulation data directory relative to this script
 SIM_DATA_DIR = os.path.join(BASE_DIR, "simulated_login_attempts")
 
 # --- 3. Load All Models and Database (Done ONCE at startup) ---
 print("Loading all models, this may take a moment...")
 try:
-    # --- CHANGE: Load .keras model ---
-    feature_model = load_model(os.path.join(BASE_DIR, "feature_model_all.keras"))
+    # --- CHANGED: Load ONNX model ---
+    onnx_path = os.path.join(BASE_DIR, "feature_model.onnx")
+    ort_session = ort.InferenceSession(onnx_path)
+    # -------------------------------
+    
     rp = joblib.load(os.path.join(BASE_DIR, "rp_transformer_all.joblib"))
     scaler = joblib.load(os.path.join(BASE_DIR, "scaler_all.joblib"))
     template_database = np.load(os.path.join(BASE_DIR, "user_template_database.npy"), allow_pickle=True).item()
 except FileNotFoundError as e:
     print(f"FATAL ERROR: Could not find model files: {e}")
-    print("Please make sure all .keras, .joblib, and .npy files are in the same folder.")
+    print("Please make sure all .onnx, .joblib, and .npy files are in the same folder.")
     print("AND ensure you have run '1_create_enrollment_db.py' first.")
     exit()
+
 print(f"Models and database with {len(template_database)} users loaded.")
 
-# --- 4. Helper Function: Biometric Processing Pipeline ---
+# --- 4. Helper Function: Biometric Processing Pipeline (Now using ONNX) ---
 def process_live_signal(signal_array):
+    """Converts a raw 1500-sample signal into a 96-dim template."""
     std_dev = np.std(signal_array)
     if std_dev == 0: std_dev = 1.0
     signal_norm = (signal_array - np.mean(signal_array)) / std_dev
-    signal_cnn = signal_norm.reshape(1, 1500, 1)
     
-    with app.app_context():
-        features_128d = feature_model.predict(signal_cnn, verbose=0)
+    # 2. Reshape for ONNX (batch_size=1, steps=1500, channels=1)
+    #    Make sure it's float32, as required by the model
+    signal_onnx = signal_norm.reshape(1, 1500, 1).astype(np.float32)
+    
+    # 3. Process through the full pipeline
+    # --- CHANGED: Use onnxruntime ---
+    input_name = ort_session.get_inputs()[0].name
+    output_name = ort_session.get_outputs()[0].name
+    
+    features_128d = ort_session.run([output_name], {input_name: signal_onnx})[0]
+    # -------------------------------
+    
     features_96d = rp.transform(features_128d)
     features_96d_scaled = scaler.transform(features_96d)
+    
     return features_96d_scaled
 
 # --- 5. API Endpoint: Get List of Test Files ---
@@ -103,11 +113,9 @@ def authenticate_user():
 # --- 7. API Endpoint: Serve the Frontend HTML ---
 @app.route("/")
 def index():
-    # --- CHANGE: Serve the correct HTML file ---
-    return render_template("3_index.html")
+    return render_template("index.html") # (Assuming you renamed 3_index.html)
 
 # --- 8. Run the Server ---
 if __name__ == "__main__":
-    # This part is for local testing. Render will use the "Start Command" instead.
-    print("Flask server running! Open http://127.0.0.1:5000 in your browser.")
-    app.run(debug=True, threaded=False)
+    print("Flask server running! Open http://1227.0.0.1:5000 in your browser.")
+    app.run(debug=True) # You can add threaded=True back if you like
