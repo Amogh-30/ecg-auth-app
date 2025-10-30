@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECG Biometric Authentication</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+               background-color: #f4f7f6; display: grid; place-items: center; min-height: 90vh; }
+        .container { background: #fff; padding: 2rem; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+        h1 { text-align: center; color: #333; }
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #555; }
+        select, button { width: 100%; padding: 0.75rem; font-size: 1rem; border-radius: 4px; border: 1px solid #ddd; }
+        button { background-color: #007bff; color: white; font-weight: 700; cursor: pointer; transition: background-color 0.2s; }
+        button:hover { background-color: #0056b3; }
+        #result { margin-top: 1.5rem; padding: 1rem; border-radius: 4px; text-align: center; font-weight: 600; }
+        .success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>ECG Biometric Login 🩺</h1>
+        
+        <div class="form-group">
+            <label for="username">1. Claim your identity:</label>
+            <select id="username-select">
+                <option value="">-- Select User --</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="signal-file">2. Provide "live" signal (.npy file):</label>
+            <select id="signal-file-select">
+                <option value="">-- Select a user first --</option>
+            </select>
+        </div>
+
+        <button id="login-button">Authenticate</button>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            
+            // --- IMPORTANT: CHANGE THIS URL ---
+            const API_BASE_URL = "https://YOUR-RENDER-API-URL.onrender.com"; 
+            // ------------------------------------
+
+            const userSelect = document.getElementById("username-select");
+            const fileSelect = document.getElementById("signal-file-select");
+            const loginButton = document.getElementById("login-button");
+            const resultDiv = document.getElementById("result");
+            
+            let testFileMap = {}; 
+
+            // 1. Fetch the list of all users and their test files
+            fetch(`${API_BASE_URL}/get_test_files`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) throw new Error(data.error);
+                    testFileMap = data;
+                    for (const username in testFileMap) {
+                        userSelect.add(new Option(username, username));
+                    }
+                })
+                .catch(err => {
+                    console.error("Error fetching file list:", err);
+                    resultDiv.textContent = "Error connecting to backend server. Is it deployed?";
+                    resultDiv.className = "error";
+                });
+
+            // 2. When a user is selected, update the second dropdown
+            userSelect.addEventListener("change", () => {
+                const selectedUser = userSelect.value;
+                fileSelect.innerHTML = ""; 
+                
+                if (selectedUser && testFileMap[selectedUser]) {
+                    fileSelect.add(new Option("-- Select a test signal --", ""));
+                    testFileMap[selectedUser].forEach(filename => {
+                        fileSelect.add(new Option(filename, filename));
+                    });
+                } else {
+                    fileSelect.add(new Option("-- Select a user first --", ""));
+                }
+            });
+
+            // 3. When the "Authenticate" button is clicked
+            loginButton.addEventListener("click", () => {
+                const username = userSelect.value;
+                const filename = fileSelect.value;
+
+                if (!username || !filename) {
+                    resultDiv.textContent = "Please select a user and a signal file.";
+                    resultDiv.className = "error";
+                    return;
+                }
+
+                resultDiv.textContent = "Authenticating...";
+                resultDiv.className = "";
+
+                // 4. Send the data to our Flask server
+                fetch(`${API_BASE_URL}/authenticate`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        "username": username,
+                        "filename": filename
+                    })
+                })
+                .then(response => response.json().then(data => ({ status: response.status, body: data })))
+                .then(res => {
+                    resultDiv.textContent = `${res.body.message} (Score: ${res.body.similarity.toFixed(4)})`;
+                    resultDiv.className = res.body.authenticated ? "success" : "error";
+                })
+                .catch(err => {
+                    console.error("Authentication error:", err);
+                    resultDiv.textContent = "An error occurred during authentication.";
+                    resultDiv.className = "error";
+                });
+            });
+        });
+    </script>
+</body>
+</html>
